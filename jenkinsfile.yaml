@@ -1,0 +1,114 @@
+pipeline {
+    agent any
+
+    environment {
+        // Define the tools and credentials
+        MAVEN_HOME = tool 'Maven_3.8.1'
+        SONARQUBE_SERVER = 'SonarQube'
+        NEXUS_CREDENTIALS = credentials('nexus-credentials-id')
+        KUBE_CONFIG = credentials('kubeconfig-credentials-id')
+        DOCKER_REGISTRY_CREDENTIALS = credentials('docker-registry-credentials-id')
+        ARTIFACTORY_URL = 'https://nexus.example.com/repository/maven-releases/'
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                // Pull the source code
+                git branch: 'main', url: 'https://github.com/example/repo.git'
+            }
+        }
+
+        stage('Build') {
+            steps {
+                script {
+                    // Run Maven build
+                    sh "${MAVEN_HOME}/bin/mvn clean install"
+                }
+            }
+        }
+
+        stage('Test') {
+            steps {
+                script {
+                    // Run unit tests
+                    sh "${MAVEN_HOME}/bin/mvn test"
+                }
+            }
+        }
+
+        stage('SonarQube Analysis') {
+            environment {
+                // Get SonarQube credentials
+                SONARQUBE_TOKEN = credentials('sonarqube-token-id')
+            }
+            steps {
+                script {
+                    // Run SonarQube static analysis
+                    withSonarQubeEnv(SONARQUBE_SERVER) {
+                        sh "${MAVEN_HOME}/bin/mvn sonar:sonar"
+                    }
+                }
+            }
+        }
+
+        stage('Artifact Upload to Nexus') {
+            steps {
+                script {
+                    // Upload artifacts to Nexus repository
+                    sh """
+                        ${MAVEN_HOME}/bin/mvn deploy \
+                        -DaltDeploymentRepository=nexus::default::${ARTIFACTORY_URL} \
+                        -Dusername=${NEXUS_CREDENTIALS_USR} \
+                        -Dpassword=${NEXUS_CREDENTIALS_PSW}
+                    """
+                }
+            }
+        }
+
+        stage('Build Docker Image') {
+            steps {
+                script {
+                    // Build Docker image
+                    sh 'docker build -t my-app:${env.BUILD_NUMBER} .'
+                    
+                    // Push Docker image to registry
+                    docker.withRegistry('https://registry.example.com', 'docker-registry-credentials-id') {
+                        sh 'docker push my-app:${env.BUILD_NUMBER}'
+                    }
+                }
+            }
+        }
+
+        stage('Deploy to Kubernetes') {
+            steps {
+                script {
+                    // Deploy to Kubernetes using kubectl
+                    withKubeConfig([credentialsId: 'kubeconfig-credentials-id']) {
+                        sh """
+                            kubectl set image deployment/my-app my-app=registry.example.com/my-app:${env.BUILD_NUMBER} \
+                            --record
+                        """
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            // Clean up
+            cleanWs()
+        }
+        success {
+            // Notify success
+            echo 'Pipeline completed successfully!'
+        }
+        failure {
+            // Notify failure
+            echo 'Pipeline failed!'
+        }
+    }
+}
+
+
